@@ -1,6 +1,6 @@
-﻿using System.Collections;
-using System.Diagnostics.CodeAnalysis;
-using TreeDataStructures.Interfaces;
+﻿﻿using System.Collections; // Подключает стандартные интерфейсы коллекций (например, IEnumerable, IEnumerator, ICollection).
+using System.Diagnostics.CodeAnalysis; // Используется в методе TryGetValue
+using TreeDataStructures.Interfaces; // находится интерфейс ITree<TKey, TValue>, который реализует класс BinarySearchTreeBase
 
 namespace TreeDataStructures.Core;
 
@@ -8,21 +8,62 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
     : ITree<TKey, TValue>
     where TNode : Node<TKey, TValue, TNode>
 {
-    protected TNode? Root;
-    public IComparer<TKey> Comparer { get; protected set; } = comparer ?? Comparer<TKey>.Default; // use it to compare Keys
+    protected TNode? Root; // корень дерева
+    public IComparer<TKey> Comparer { get; protected set; } = comparer ?? Comparer<TKey>.Default; // чтобы сравнивать ключи
 
-    public int Count { get; protected set; }
+    public int Count { get; protected set; } // количество элементов в дереве
     
     public bool IsReadOnly => false;
 
-    public ICollection<TKey> Keys => throw new NotImplementedException();
-    public ICollection<TValue> Values => throw new NotImplementedException();
+    public ICollection<TKey> Keys => InOrder().Select(x => x.Key).ToList();
+    public ICollection<TValue> Values => InOrder().Select(x => x.Value).ToList();
     
     
     public virtual void Add(TKey key, TValue value)
     {
-        throw new NotImplementedException(
-            "Implement standard BST add logic using <CreateNode(key, value)> and OnNodeAdded(newNode)");
+        TNode newNode = CreateNode (key, value);
+         if (Root == null) 
+        {
+            Root = newNode;
+            Count++;
+            OnNodeAdded(newNode);
+            return;
+        }
+        else
+        {
+            TNode? current = Root; // узел, на котором сейчас стоим
+            while (true)
+            {
+                int cmp = Comparer.Compare(key, current.Key);
+                if (cmp == 0) 
+                {
+                    current.Value = value;
+                    return;
+                }
+                if (cmp < 0) 
+                {
+                    if (current.Left == null)
+                    {
+                        current.Left = newNode;
+                        newNode.Parent = current;
+                        break;
+                    }
+                    current = current.Left;
+                }
+                if (cmp > 0)
+                {
+                    if (current.Right == null)
+                    {
+                        current.Right = newNode;
+                        newNode.Parent = current;
+                        break;
+                    }
+                    current = current.Right;
+                }
+            }
+            Count++;
+            OnNodeAdded(newNode);
+        }
     }
 
     
@@ -37,9 +78,51 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
     }
     
     
-    protected virtual void RemoveNode(TNode node)
+    protected virtual void RemoveNode (TNode node)
     {
-        throw new NotImplementedException("Implement standard BST delete logic using Transplant helper");
+        if (node.Left == null && node.Right == null) 
+        {
+            TNode? parent = node.Parent;
+            Transplant (node, null);
+            OnNodeRemoved(parent, null);
+        }
+        else if (node.Left != null && node.Right == null)
+        {
+            TNode? parent = node.Parent;
+            TNode? left = node.Left;
+            Transplant (node, node.Left);
+            OnNodeRemoved(parent, left);
+        }
+        else if (node.Left == null && node.Right != null)
+        {
+            TNode? parent = node.Parent;
+            TNode? right = node.Right;
+            Transplant (node, node.Right);
+            OnNodeRemoved(parent, right);
+            
+        }
+        else // когда два ребенка надо найти минимальный элемент справа и поставить на место удаляемого узла
+        {
+            TNode current = node.Right;
+            while (current.Left != null)
+            {
+                current = current.Left;
+            }
+            TNode? rebalanceStart;
+            if (current != node.Right)
+            {
+                rebalanceStart = current.Parent;
+                Transplant (current, current.Right); // удалили наш current
+                current.Right = node.Right;
+                current.Right.Parent = current;
+            }
+            else rebalanceStart = current;
+
+            Transplant (node, current);
+            current.Left = node.Left;
+            current.Left.Parent = current;
+            OnNodeRemoved(rebalanceStart, current);
+        }
     }
 
     public virtual bool ContainsKey(TKey key) => FindNode(key) != null;
@@ -56,7 +139,7 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
         return false;
     }
 
-    public TValue this[TKey key]
+    public TValue this[TKey key] // обращается, как к массиву
     {
         get => TryGetValue(key, out TValue? val) ? val : throw new KeyNotFoundException();
         set => Add(key, value);
@@ -69,14 +152,15 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
     /// Вызывается после успешной вставки
     /// </summary>
     /// <param name="newNode">Узел, который встал на место</param>
-    protected virtual void OnNodeAdded(TNode newNode) { }
+    /// Хуки — это пустые виртуальные методы, которые вызываются в ключевые моменты жизни дерева. Они нужны, чтобы наследники могли «подключиться» к этим событиям и добавить свою логику, не переписывая основной код.
+    protected virtual void OnNodeAdded(TNode newNode) { } // Главный смысл: Дать наследникам возможность отреагировать на добавление элемента без переписывания метода Add.
     
     /// <summary>
     /// Вызывается после удаления. 
     /// </summary>
     /// <param name="parent">Узел, чей ребенок изменился</param>
     /// <param name="child">Узел, который встал на место удаленного</param>
-    protected virtual void OnNodeRemoved(TNode? parent, TNode? child) { }
+    protected virtual void OnNodeRemoved(TNode? parent, TNode? child) { } // Главный смысл: Сообщить наследникам, где в дереве произошли изменения, чтобы они могли обновить свою логику (балансировку, статистику, кэш).
     
     #endregion
     
@@ -97,34 +181,59 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
         return null;
     }
 
-    protected void RotateLeft(TNode x)
+    protected void RotateLeft(TNode x) // вращения дерева
     {
-        throw new NotImplementedException();
+        if (x.Right == null) return;
+        TNode y = x.Right;
+        TNode? z = y.Left;
+        y.Parent = x.Parent;
+        if (x.Parent == null) { Root = y; }
+        else if (x.IsRightChild) {x.Parent.Right = y; }
+        else { x.Parent.Left = y; }
+        y.Left = x;
+        x.Parent = y;
+        x.Right = z;
+        if (z != null) { z.Parent = x; }
+        
     }
 
     protected void RotateRight(TNode y)
     {
-        throw new NotImplementedException();
+        if (y.Left == null) return;
+        TNode x = y.Left;
+        TNode? z = x.Right;
+        x.Parent = y.Parent;
+        if (y.Parent == null) { Root = x; }
+        else if (y.IsLeftChild) {y.Parent.Left = x; }
+        else { y.Parent.Right = x; }
+        x.Right = y;
+        y.Parent = x;
+        y.Left = z;
+        if (z != null) { z.Parent = y; }
     }
     
     protected void RotateBigLeft(TNode x)
     {
-        throw new NotImplementedException();
+        RotateLeft (x.Right!);
+        RotateLeft(x);
     }
     
     protected void RotateBigRight(TNode y)
     {
-        throw new NotImplementedException();
+        RotateRight (y.Left!);
+        RotateRight(y);
     }
     
     protected void RotateDoubleLeft(TNode x)
     {
-        throw new NotImplementedException();
+        RotateRight(x.Right!);
+        RotateLeft(x);
     }
     
     protected void RotateDoubleRight(TNode y)
     {
-        throw new NotImplementedException();
+        RotateLeft(y.Left!);
+        RotateRight(y);
     }
     
     protected void Transplant(TNode u, TNode? v)
@@ -145,19 +254,30 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
     }
     #endregion
     
-    public IEnumerable<TreeEntry<TKey, TValue>>  InOrder() => InOrderTraversal(Root);
-    
-    private IEnumerable<TreeEntry<TKey, TValue>>  InOrderTraversal(TNode? node)
+    public IEnumerable<TreeEntry<TKey, TValue>>  InOrder()
     {
-        if (node == null) {  yield break; }
-        throw new NotImplementedException();
+        return new TreeIterator(Root, TraversalStrategy.InOrder);
     }
-    
-    public IEnumerable<TreeEntry<TKey, TValue>>  PreOrder() => throw new NotImplementedException();
-    public IEnumerable<TreeEntry<TKey, TValue>>  PostOrder() => throw new NotImplementedException();
-    public IEnumerable<TreeEntry<TKey, TValue>>  InOrderReverse() => throw new NotImplementedException();
-    public IEnumerable<TreeEntry<TKey, TValue>>  PreOrderReverse() => throw new NotImplementedException();
-    public IEnumerable<TreeEntry<TKey, TValue>>  PostOrderReverse() => throw new NotImplementedException();
+    public IEnumerable<TreeEntry<TKey, TValue>>  PreOrder()
+    {
+        return new TreeIterator(Root, TraversalStrategy.PreOrder);
+    }
+    public IEnumerable<TreeEntry<TKey, TValue>>  PostOrder()
+    {
+        return new TreeIterator(Root, TraversalStrategy.PostOrder);
+    }
+    public IEnumerable<TreeEntry<TKey, TValue>>  InOrderReverse()
+    {
+        return new TreeIterator(Root, TraversalStrategy.InOrderReverse);
+    }
+    public IEnumerable<TreeEntry<TKey, TValue>>  PreOrderReverse()
+    {
+        return new TreeIterator(Root, TraversalStrategy.PreOrderReverse);
+    }
+    public IEnumerable<TreeEntry<TKey, TValue>>  PostOrderReverse()
+    {
+        return new TreeIterator(Root, TraversalStrategy.PostOrderReverse);
+    } 
     
     /// <summary>
     /// Внутренний класс-итератор. 
@@ -169,26 +289,285 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
     {
         // probably add something here
         private readonly TraversalStrategy _strategy; // or make it template parameter?
-        
+        private readonly TNode? _root;
+        private TNode? _current;
+        private bool _started;
+
+
+        public TreeIterator(TNode? root, TraversalStrategy strategy) // констурктор
+        {
+            _root = root;
+            _strategy = strategy;
+            _current = null;
+            _started = false;
+        }
+
         public IEnumerator<TreeEntry<TKey, TValue>> GetEnumerator() => this;
         IEnumerator IEnumerable.GetEnumerator() => this;
         
-        public TreeEntry<TKey, TValue> Current => throw new NotImplementedException();
+        public TreeEntry<TKey, TValue> Current => _current == null ? throw new InvalidOperationException()
+        : new TreeEntry<TKey, TValue>(_current.Key, _current.Value, _current.Height);
         object IEnumerator.Current => Current;
         
         
         public bool MoveNext()
         {
-            if (_strategy == TraversalStrategy.InOrder)
+            if (_strategy == TraversalStrategy.InOrder) // ДА
             {
-                throw new NotImplementedException();
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        while (_current.Left != null) _current = _current.Left;
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+                
+                if (_current == null) return false;
+
+                if (_current.Right != null)
+                {
+                    _current = _current.Right;
+                    while (_current.Left != null) _current = _current.Left;
+                    return true;
+                }
+                TNode? child = _current;
+                TNode? parent = _current.Parent;
+
+                while (parent != null && parent.Right == child)
+                {
+                    child = parent;
+                    parent = parent.Parent;
+                }
+
+                _current = parent;
+                return _current != null;
             }
+
+            if (_strategy == TraversalStrategy.PreOrder) // корень - лево - право ДА
+            {
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (_current == null) return false;
+
+                if (_current.Left != null)
+                {
+                    _current = _current.Left;
+                    return true;
+                }
+                if (_current.Right != null)
+                {
+                    _current = _current.Right;
+                    return true;
+                }
+
+                TNode? child = _current;
+                TNode? parent = _current.Parent;
+                while (parent != null && (child == parent.Right || parent.Right == null))
+                {
+                    child = parent;
+                    parent = parent.Parent;
+                }
+
+                if (parent == null)
+                {
+                    _current = null;
+                    return false;
+                }
+                _current = parent.Right;
+                return true;
+            }
+
+            if (_strategy == TraversalStrategy.PostOrder) // лево право корень ДА
+            {
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        while (_current.Left != null || _current.Right != null)
+                        {
+                            if (_current.Left != null) _current = _current.Left;
+                            else _current = _current.Right;
+                        }
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (_current == null) return false;
+
+                TNode? parent = _current.Parent;
+
+                if (parent == null)
+                {
+                    _current = null;
+                    return false;
+                }
+
+                if (_current == parent.Left && parent.Right != null)
+                {
+                    _current = parent.Right;
+                    while (_current.Left != null || _current.Right != null)
+                    {
+                        if (_current.Left != null) _current = _current.Left;
+                        else _current = _current.Right;
+                    }
+                    return true;
+                }
+                else
+                {
+                    _current = parent;
+                    return true;
+                }
+            }
+
+            if (_strategy == TraversalStrategy.InOrderReverse) // ДА
+            {
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        while (_current.Right != null) _current = _current.Right;
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (_current == null) return false;
+
+                if (_current.Left != null)
+                {
+                    _current = _current.Left;
+                    while (_current.Right != null) _current = _current.Right;
+                    return true;
+                }
+
+                TNode? child = _current;
+                TNode? parent = _current.Parent;
+
+                while (parent != null && parent.Left == child)
+                {
+                    child = parent;
+                    parent = parent.Parent;
+                }
+                _current = parent;
+                return _current != null;
+            }
+
+
+            if (_strategy == TraversalStrategy.PreOrderReverse) // право - лево - корень PROBLEM
+            {
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        while (_current.Left != null || _current.Right != null)
+                        {
+                            if (_current.Right != null) _current = _current.Right;
+                            else _current = _current.Left;
+                        }
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (_current == null) return false;
+
+                TNode? parent = _current.Parent;
+
+                if (parent == null)
+                {
+                    _current = null;
+                    return false;
+                }
+
+                if (_current == parent.Right && parent.Left != null)
+                {
+                    _current = parent.Left;
+                    while (_current.Right != null || _current.Left != null)
+                    {
+                        if (_current.Right != null) _current = _current.Right;
+                        else _current = _current.Left;
+                    }
+                    return true;
+                }
+                else
+                {
+                    _current = parent;
+                    return true;
+                }
+            }
+
+
+            if (_strategy == TraversalStrategy.PostOrderReverse) // корень - право - лево
+            {
+                if (!_started)
+                {
+                    if (_root != null)
+                    {
+                        _current = _root;
+                        _started = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (_current == null) return false;
+
+                if (_current.Right != null)
+                {
+                    _current = _current.Right;
+                    return true;
+                }
+                if (_current.Left != null)
+                {
+                    _current = _current.Left;
+                    return true;
+                }
+
+                TNode? child = _current;
+                TNode? parent = _current.Parent;
+                while (parent != null && (child == parent.Left || parent.Left == null))
+                {
+                    child = parent;
+                    parent = parent.Parent;
+                }
+
+                if (parent == null)
+                {
+                    _current = null;
+                    return false;
+                }
+                _current = parent.Left;
+                return true;
+            }
+
+
             throw new NotImplementedException("Strategy not implemented");
         }
         
         public void Reset()
         {
-            throw new NotImplementedException();
+            _current = null;
+            _started = false;
         }
 
         

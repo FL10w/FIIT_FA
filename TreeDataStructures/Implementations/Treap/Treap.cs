@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿﻿using System.Diagnostics.CodeAnalysis;
 using TreeDataStructures.Core;
 
 namespace TreeDataStructures.Implementations.Treap;
@@ -13,7 +13,21 @@ public class Treap<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, TreapNode<
     /// </summary>
     protected virtual (TreapNode<TKey, TValue>? Left, TreapNode<TKey, TValue>? Right) Split(TreapNode<TKey, TValue>? root, TKey key)
     {
-        throw new NotImplementedException("Implement Split operation");
+        if (root == null) return (null, null);
+        if (root.Key.CompareTo(key) <= 0)
+        {
+            var (l, r) = Split(root.Right, key);
+            root.Right = l;
+            if (l != null) l.Parent = root;
+            return (root, r);
+        }
+        else
+        {
+            var(l, r) = Split(root.Left, key);
+            root.Left = r;
+            if (r != null) r.Parent = root;
+            return(l, root);
+        }
     }
 
     /// <summary>
@@ -23,32 +37,63 @@ public class Treap<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, TreapNode<
     /// </summary>
     protected virtual TreapNode<TKey, TValue>? Merge(TreapNode<TKey, TValue>? left, TreapNode<TKey, TValue>? right)
     {
-        throw new NotImplementedException("Implement Merge operation");
+        if (left == null) return right;
+        if (right == null) return left;
+
+        if (left.Priority > right.Priority)
+        {
+            left.Right = Merge(left.Right, right);
+            if (left.Right != null) left.Right.Parent = left;
+            return left;
+        }
+
+        else
+        {
+            right.Left = Merge(left, right.Left);
+            if (right.Left != null) right.Left.Parent = right;
+            return right;
+        }
     }
     
 
     public override void Add(TKey key, TValue value)
     {
-        throw new NotImplementedException("Implement Add using Split and Merge");
+        var ex = FindNode(key);
+        if (ex != null)
+        {
+            ex.Value = value;
+            return;
+        }
+        var (left, right) = Split(Root, key);
+        var newNode = CreateNode(key, value);
+        Root = Merge(Merge(left, newNode), right);
+        if (Root != null) Root.Parent = null;
+        Count++;
     }
 
     public override bool Remove(TKey key)
     {
-        throw new NotImplementedException("Implement Remove using Split and Merge");
+        var node = FindNode(key);
+        if (node == null) return false;
+        var merged = Merge(node.Left, node.Right);
+        if (node.Parent == null) Root = merged;
+        else if (node.Parent.Left == node) node.Parent.Left = merged;
+        else node.Parent.Right = merged;
+        if (merged != null) merged.Parent = node.Parent;
+        Count--;
+        return true;
     }
 
     protected override TreapNode<TKey, TValue> CreateNode(TKey key, TValue value)
     {
-        throw new NotImplementedException();
+        return new TreapNode<TKey, TValue>(key, value)
+        {
+            Priority = Random.Shared.Next()
+        };
     }
-    protected override void OnNodeAdded(TreapNode<TKey, TValue> newNode)
-    {
-        throw new NotImplementedException();
-    }
+
+    protected override void OnNodeAdded(TreapNode<TKey, TValue> newNode) {}
     
-    protected override void OnNodeRemoved(TreapNode<TKey, TValue>? parent, TreapNode<TKey, TValue>? child)
-    {
-        throw new NotImplementedException();
-    }
+    protected override void OnNodeRemoved(TreapNode<TKey, TValue>? parent, TreapNode<TKey, TValue>? child) {}
     
 }
