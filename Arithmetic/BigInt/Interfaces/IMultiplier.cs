@@ -1,6 +1,6 @@
 ﻿namespace Arithmetic.BigInt.Interfaces;
 
-internal interface IMultiplier
+public interface IMultiplier
 {
-    BetterBigInteger Multiply(BetterBigInteger a, BetterBigInteger b);
+    uint[] Multiply(uint[] a, uint[] b);
 }
