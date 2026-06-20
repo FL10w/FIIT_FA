@@ -9,6 +9,9 @@ internal class SimpleMultiplier : IMultiplier
 
     public uint[] Multiply(uint[] a, uint[] b)
     {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
+
         return MultiplyMagnitude(a, b);
     }
 
@@ -41,6 +44,25 @@ internal class SimpleMultiplier : IMultiplier
         }
 
         return result;
+    }
+
+    internal static ReadOnlySpan<uint> Trimmed(ReadOnlySpan<uint> digits)
+    {
+        int length = digits.Length;
+        while (length > 0 && digits[length - 1] == 0)
+            length--;
+
+        return digits[..length];
+    }
+
+    internal static uint[] MultiplySchoolbook(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
+    {
+        a = Trimmed(a);
+        b = Trimmed(b);
+        if (a.Length == 0 || b.Length == 0)
+            return [0];
+
+        return MultiplyMagnitude(a.ToArray(), b.ToArray());
     }
 
     public BetterBigInteger Multiply(BetterBigInteger a, BetterBigInteger b)

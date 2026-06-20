@@ -11,186 +11,133 @@ internal class KaratsubaMultiplier : IMultiplier
         ArgumentNullException.ThrowIfNull(a);
         ArgumentNullException.ThrowIfNull(b);
 
-        uint[] product = MultiplyKaratsuba(a, b);
-        return product.Length == 0 ? [0] : product;
+        return Karatsuba(a, b);
     }
 
     public BetterBigInteger Multiply(BetterBigInteger a, BetterBigInteger b)
     {
-        ArgumentNullException.ThrowIfNull(a);
-        ArgumentNullException.ThrowIfNull(b);
+        if (a is null) throw new ArgumentNullException(nameof(a));
+        if (b is null) throw new ArgumentNullException(nameof(b));
 
-        bool isNegative = a.IsNegative ^ b.IsNegative;
-        uint[] product = Multiply(a.GetDigits().ToArray(), b.GetDigits().ToArray());
-        return new BetterBigInteger(product, isNegative);
+        var x = SimpleMultiplier.Trimmed(a.GetDigits());
+        var y = SimpleMultiplier.Trimmed(b.GetDigits());
+        if (x.Length == 0 || y.Length == 0) return new BetterBigInteger([0]);
+
+        uint[] mag = Karatsuba(x, y);
+        bool neg = a.IsNegative ^ b.IsNegative;
+        return new BetterBigInteger(mag, neg);
     }
 
-    private static uint[] MultiplyKaratsuba(uint[] left, uint[] right)
+    internal static uint[] Karatsuba(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
-        left = Normalize(left);
-        right = Normalize(right);
+        a = SimpleMultiplier.Trimmed(a);
+        b = SimpleMultiplier.Trimmed(b);
+        if (a.Length == 0 || b.Length == 0) return [0u];
+        if (a.Length <= SchoolbookThreshold || b.Length <= SchoolbookThreshold)
+            return SimpleMultiplier.MultiplySchoolbook(a, b);
 
-        int leftLength = left.Length;
-        int rightLength = right.Length;
-        if (leftLength == 0 || rightLength == 0)
-        {
-            return [];
-        }
+        int n = Math.Max(a.Length, b.Length);
+        int m = (n + 1) / 2;
 
-        int n = Math.Max(leftLength, rightLength);
-        if (n <= SchoolbookThreshold)
-        {
-            return SimpleMultiplier.MultiplyMagnitude(left, right);
-        }
+        var a0 = a[..Math.Min(m, a.Length)];
+        var a1 = a.Length > m ? a[m..] : ReadOnlySpan<uint>.Empty;
+        var b0 = b[..Math.Min(m, b.Length)];
+        var b1 = b.Length > m ? b[m..] : ReadOnlySpan<uint>.Empty;
 
-        int split = n / 2;
+        uint[] z0 = Karatsuba(a0, b0);
+        uint[] z2 = Karatsuba(a1, b1);
 
-        uint[] leftLow = Slice(left, 0, Math.Min(split, leftLength));
-        uint[] leftHigh = Slice(left, Math.Min(split, leftLength), leftLength - Math.Min(split, leftLength));
-        uint[] rightLow = Slice(right, 0, Math.Min(split, rightLength));
-        uint[] rightHigh = Slice(right, Math.Min(split, rightLength), rightLength - Math.Min(split, rightLength));
+        uint[] a0PlusA1 = Add(a0, a1);
+        uint[] b0PlusB1 = Add(b0, b1);
+        uint[] z1 = Karatsuba(a0PlusA1, b0PlusB1);
 
-        uint[] z0 = MultiplyKaratsuba(leftLow, rightLow);
-        uint[] z2 = MultiplyKaratsuba(leftHigh, rightHigh);
+        z1 = Sub(z1, z0);
+        z1 = Sub(z1, z2);
 
-        uint[] sumLeft = AddMagnitude(leftLow, leftHigh);
-        uint[] sumRight = AddMagnitude(rightLow, rightHigh);
-        uint[] z1 = MultiplyKaratsuba(sumLeft, sumRight);
-        z1 = SubtractMagnitude(z1, z0);
-        z1 = SubtractMagnitude(z1, z2);
-
-        uint[] partLow = z0;
-        uint[] partMid = ShiftWords(z1, split);
-        uint[] partHigh = ShiftWords(z2, 2 * split);
-
-        return AddMagnitude(partLow, AddMagnitude(partMid, partHigh));
+        uint[] res = AddShifted(z0, z1, m);
+        res = AddShifted(res, z2, 2 * m);
+        return Trim(res);
     }
 
-    private static uint[] AddMagnitude(uint[] left, uint[] right)
+    private static uint[] Add(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
-        int max = Math.Max(left.Length, right.Length);
-        uint[] result = new uint[max + 1];
+        int n = Math.Max(a.Length, b.Length);
+        var res = new uint[n + 1];
         ulong carry = 0;
-
-        for (int i = 0; i < max; i++)
+        for (int i = 0; i < n; i++)
         {
-            ulong current = carry;
-            if (i < left.Length)
-            {
-                current += left[i];
-            }
-
-            if (i < right.Length)
-            {
-                current += right[i];
-            }
-
-            result[i] = (uint)current;
-            carry = current >> 32;
+            ulong av = i < a.Length ? a[i] : 0;
+            ulong bv = i < b.Length ? b[i] : 0;
+            ulong sum = av + bv + carry;
+            res[i] = (uint)sum;
+            carry = sum >> 32;
         }
-
-        result[max] = (uint)carry;
-        return Normalize(result);
+        if (carry != 0) res[n] = (uint)carry;
+        return Trim(res);
     }
 
-    private static uint[] SubtractMagnitude(uint[] left, uint[] right)
+    private static uint[] Sub(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
-        if (CompareMagnitude(left, right) < 0)
-        {
-            throw new InvalidOperationException("Karatsuba intermediate result became negative.");
-        }
-
-        uint[] result = new uint[left.Length];
+        a = SimpleMultiplier.Trimmed(a);
+        b = SimpleMultiplier.Trimmed(b);
+        var res = new uint[a.Length];
         long borrow = 0;
-
-        for (int i = 0; i < left.Length; i++)
+        for (int i = 0; i < a.Length; i++)
         {
-            long current = (long)left[i] - borrow - (i < right.Length ? right[i] : 0);
-            if (current < 0)
+            long av = (long)a[i];
+            long bv = i < b.Length ? (long)b[i] : 0;
+            long diff = av - bv - borrow;
+            if (diff < 0)
             {
-                current += 1L << 32;
+                diff += 1L << 32;
                 borrow = 1;
             }
             else
             {
                 borrow = 0;
             }
-
-            result[i] = (uint)current;
+            res[i] = (uint)diff;
         }
-
-        return Normalize(result);
+        return Trim(res);
     }
 
-    private static int CompareMagnitude(uint[] left, uint[] right)
+    private static uint[] AddShifted(ReadOnlySpan<uint> baseArr, ReadOnlySpan<uint> addArr, int shiftLimbs)
     {
-        int leftLength = left.Length;
-        int rightLength = right.Length;
-        if (leftLength != rightLength)
-        {
-            return leftLength.CompareTo(rightLength);
-        }
+        baseArr = SimpleMultiplier.Trimmed(baseArr);
+        addArr = SimpleMultiplier.Trimmed(addArr);
+        if (addArr.Length == 0) return baseArr.ToArray();
 
-        for (int i = leftLength - 1; i >= 0; i--)
-        {
-            if (left[i] != right[i])
-            {
-                return left[i] < right[i] ? -1 : 1;
-            }
-        }
+        int need = Math.Max(baseArr.Length, addArr.Length + shiftLimbs) + 1;
+        var res = new uint[need];
+        baseArr.CopyTo(res);
 
-        return 0;
+        ulong carry = 0;
+        int i = 0;
+        for (; i < addArr.Length; i++)
+        {
+            int idx = i + shiftLimbs;
+            ulong sum = (ulong)res[idx] + addArr[i] + carry;
+            res[idx] = (uint)sum;
+            carry = sum >> 32;
+        }
+        int k = i + shiftLimbs;
+        while (carry != 0)
+        {
+            ulong sum = (ulong)res[k] + carry;
+            res[k] = (uint)sum;
+            carry = sum >> 32;
+            k++;
+        }
+        return Trim(res);
     }
 
-    private static uint[] ShiftWords(uint[] digits, int wordShift)
+    private static uint[] Trim(uint[] arr)
     {
-        if (digits.Length == 0)
-        {
-            return [];
-        }
-
-        if (wordShift <= 0)
-        {
-            return [.. digits];
-        }
-
-        uint[] result = new uint[digits.Length + wordShift];
-        Array.Copy(digits, 0, result, wordShift, digits.Length);
-        return result;
-    }
-
-    private static uint[] Slice(uint[] source, int start, int length)
-    {
-        if (length <= 0)
-        {
-            return [];
-        }
-
-        uint[] result = new uint[length];
-        Array.Copy(source, start, result, 0, length);
-        return Normalize(result);
-    }
-
-    private static uint[] Normalize(uint[] digits)
-    {
-        int length = digits.Length;
-        while (length > 0 && digits[length - 1] == 0)
-        {
-            length--;
-        }
-
-        if (length == 0)
-        {
-            return [];
-        }
-
-        if (length == digits.Length)
-        {
-            return digits;
-        }
-
-        uint[] result = new uint[length];
-        Array.Copy(digits, result, length);
-        return result;
+        int len = arr.Length;
+        while (len > 1 && arr[len - 1] == 0) len--;
+        if (len == arr.Length) return arr;
+        var outArr = new uint[len];
+        Array.Copy(arr, outArr, len);
+        return outArr;
     }
 }

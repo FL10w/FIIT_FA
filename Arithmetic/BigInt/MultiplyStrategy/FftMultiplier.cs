@@ -1,191 +1,178 @@
-﻿using System.Numerics;
-using Arithmetic.BigInt.Interfaces;
+﻿using Arithmetic.BigInt.Interfaces;
 
 namespace Arithmetic.BigInt.MultiplyStrategy;
 
 internal class FftMultiplier : IMultiplier
 {
-    public uint[] Multiply(uint[] a, uint[] b)
-    {
-        ArgumentNullException.ThrowIfNull(a);
-        ArgumentNullException.ThrowIfNull(b);
+    private const ulong M1 = 998244353; // простые числа вида c * 2^k + 1, что позволяет делить массивы пополам k раз
+    private const ulong M2 = 1004535809;
+    private const ulong M3 = 469762049;
 
-        BetterBigInteger left = new(a, false);
-        BetterBigInteger right = new(b, false);
-        BetterBigInteger product = Multiply(left, right);
-        return product.GetDigits().ToArray();
-    }
+    private const ulong R1 = 3; // первообразные корни (генераторы) для соответствующих модулей, чтобы вычислять корни из единицы
+    private const ulong R2 = 3;
+    private const ulong R3 = 3;
 
     public BetterBigInteger Multiply(BetterBigInteger a, BetterBigInteger b)
     {
-        ArgumentNullException.ThrowIfNull(a);
-        ArgumentNullException.ThrowIfNull(b);
+        if (a.IsZero || b.IsZero)
+            return BetterBigInteger.Zero;
 
-        if (IsZero(a) || IsZero(b))
-        {
-            return new BetterBigInteger([0]);
-        }
+        var aParts = To16Bit(a.GetDigits());
+        var bParts = To16Bit(b.GetDigits());
 
-        bool isNegative = a.IsNegative ^ b.IsNegative;
-        string left = new BetterBigInteger(a.GetDigits().ToArray(), false).ToString(10);
-        string right = new BetterBigInteger(b.GetDigits().ToArray(), false).ToString(10);
+        var c1 = PrepAndMult(aParts, bParts, M1, R1); // 3 независимых свертки (перемножения) по трем разным модулям
+        var c2 = PrepAndMult(aParts, bParts, M2, R2);
+        var c3 = PrepAndMult(aParts, bParts, M3, R3);
 
-        int[] leftDigits = ToReversedDigits(left);
-        int[] rightDigits = ToReversedDigits(right);
-        long[] convolution = Convolve(leftDigits, rightDigits);
-        string product = NormalizeDecimalDigits(convolution);
+        ulong[] result = CRT(c1, c2, c3);
 
-        if (isNegative && product != "0")
-        {
-            product = "-" + product;
-        }
-
-        return new BetterBigInteger(product, 10);
+        return Normalize(result, a.IsNegative != b.IsNegative); // восстанавливаем переносы и запаковываем обратно в 32-битные куски
     }
 
-    private static bool IsZero(BetterBigInteger value)
+    private static ulong[] PrepAndMult(uint[] a, uint[] b, ulong mod, ulong root) // свертка двух массивов
     {
-        ReadOnlySpan<uint> digits = value.GetDigits();
-        return digits.Length == 0 || digits.Length == 1 && digits[0] == 0;
+        int n = 1;
+        while (n < a.Length + b.Length) n <<= 1; // подбираем степень двойки
+
+        ulong[] fa = new ulong[n];
+        ulong[] fb = new ulong[n];
+
+        for (int i = 0; i < a.Length; i++) fa[i] = a[i];
+        for (int i = 0; i < b.Length; i++) fb[i] = b[i];
+
+        NTT(fa, false, mod, root); // из коэфицентов в значения в точках
+        NTT(fb, false, mod, root);
+
+        for (int i = 0; i < n; i++)
+            fa[i] = (fa[i] * fb[i]) % mod;
+
+        NTT(fa, true, mod, root);
+
+        return fa;
     }
 
-    private static int[] ToReversedDigits(string value)
+    private static void NTT(ulong[] a, bool invert, ulong mod, ulong root)
     {
-        int[] digits = new int[value.Length];
-        for (int i = 0; i < value.Length; i++)
-        {
-            digits[i] = value[value.Length - 1 - i] - '0';
-        }
+        int n = a.Length;
 
-        return digits;
-    }
-
-    private static long[] Convolve(int[] left, int[] right)
-    {
-        int size = 1;
-        int need = left.Length + right.Length;
-        while (size < need)
-        {
-            size <<= 1;
-        }
-
-        Complex[] fa = new Complex[size];
-        Complex[] fb = new Complex[size];
-        for (int i = 0; i < left.Length; i++)
-        {
-            fa[i] = new Complex(left[i], 0);
-        }
-
-        for (int i = 0; i < right.Length; i++)
-        {
-            fb[i] = new Complex(right[i], 0);
-        }
-
-        Fft(fa, invert: false);
-        Fft(fb, invert: false);
-
-        for (int i = 0; i < size; i++)
-        {
-            fa[i] *= fb[i];
-        }
-
-        Fft(fa, invert: true);
-
-        long[] result = new long[need];
-        for (int i = 0; i < need; i++)
-        {
-            result[i] = (long)Math.Round(fa[i].Real);
-        }
-
-        return result;
-    }
-
-    private static void Fft(Complex[] values, bool invert)
-    {
-        int n = values.Length;
+        // меняем элементы местами чтобы потом складывать in-place
         for (int i = 1, j = 0; i < n; i++)
         {
             int bit = n >> 1;
-            while ((j & bit) != 0)
-            {
+            for (; (j & bit) != 0; bit >>= 1)
                 j ^= bit;
-                bit >>= 1;
-            }
+            j |= bit;
 
-            j ^= bit;
             if (i < j)
-            {
-                (values[i], values[j]) = (values[j], values[i]);
-            }
+                (a[i], a[j]) = (a[j], a[i]);
         }
 
-        for (int len = 2; len <= n; len <<= 1)
+        for (int len = 2; len <= n; len <<= 1) // длина текущего блока
         {
-            double angle = 2 * Math.PI / len * (invert ? -1 : 1);
-            Complex wLen = new Complex(Math.Cos(angle), Math.Sin(angle));
+            ulong rootOfUnity = Pow(root, (mod - 1) / (ulong)len, mod);
+            if (invert)
+                rootOfUnity = ModInverse(rootOfUnity, mod); // обратный корень    
 
-            for (int i = 0; i < n; i += len)
+            for (int i = 0; i < n; i += len) // цикл по блокам
             {
-                Complex w = Complex.One;
-                int half = len >> 1;
-                for (int j = 0; j < half; j++)
+                ulong w = 1;
+                for (int j = 0; j < len / 2; j++)
                 {
-                    Complex u = values[i + j];
-                    Complex v = values[i + j + half] * w;
-                    values[i + j] = u + v;
-                    values[i + j + half] = u - v;
-                    w *= wLen;
+                    ulong u = a[i + j];
+                    ulong v = a[i + j + len / 2] * w % mod;
+
+                    a[i + j] = (u + v) % mod;
+                    a[i + j + len / 2] = (u + mod - v) % mod;
+
+                    w = (w * rootOfUnity) % mod;
                 }
             }
         }
 
-        if (!invert)
+        if (invert)
         {
-            return;
-        }
-
-        for (int i = 0; i < n; i++)
-        {
-            values[i] /= n;
+            ulong invN = ModInverse((ulong)n, mod);
+            for (int i = 0; i < n; i++)
+                a[i] = (a[i] * invN) % mod;
         }
     }
 
-    private static string NormalizeDecimalDigits(long[] digits)
+    private static ulong[] CRT(ulong[] a1, ulong[] a2, ulong[] a3) // Китайская Теорема об Остатках (Алгоритм Гарнера)
     {
-        long carry = 0;
+        int n = a1.Length;
+        ulong[] res = new ulong[n];
+
+        ulong m1InvM2 = ModInverse(M1 % M2, M2);
+        ulong m12 = M1 * M2;
+        ulong m12InvM3 = ModInverse(m12 % M3, M3);
+
+        for (int i = 0; i < n; i++) // x = a1 + t1 * M1 + t2 * (M1 * M2)
+        {
+            ulong x1 = a1[i];
+            ulong x2 = a2[i];
+            ulong x3 = a3[i];
+
+            ulong t1 = ((x2 + M2 - x1 % M2) * m1InvM2) % M2;
+            ulong r12 = x1 + t1 * M1;
+
+            ulong t2 = ((x3 + M3 - r12 % M3) * m12InvM3) % M3;
+            ulong r = r12 + t2 * m12;
+
+            res[i] = r;
+        }
+
+        return res;
+    }
+
+    private static ulong Pow(ulong a, ulong e, ulong mod) // быстрое возведение в степень по модулю
+    {
+        ulong res = 1;
+        while (e > 0)
+        {
+            if ((e & 1) != 0) // последний бит равен 1?
+                res = (res * a) % mod;
+            a = (a * a) % mod;
+            e >>= 1;
+        }
+        return res;
+    }
+
+    private static ulong ModInverse(ulong x, ulong mod) // поиск обратного элемента по модулю с помощью малой теоремы ферма 
+    {
+        return Pow(x, mod - 2, mod); // x^(M−1) ≡ 1 (mod M)   =>   x^(-1) = a^(M-2) % M
+    }
+
+    private static uint[] To16Bit(ReadOnlySpan<uint> digits)
+    {
+        uint[] res = new uint[digits.Length * 2]; // тк 2 32-битных это 4 16-ти битных
         for (int i = 0; i < digits.Length; i++)
         {
-            long current = digits[i] + carry;
-            carry = current / 10;
-            long remainder = current % 10;
-            if (remainder < 0)
-            {
-                remainder += 10;
-                carry--;
-            }
-
-            digits[i] = remainder;
+            res[2 * i] = (uint)(digits[i] & 0xFFFF); // оставляем только правую часть
+            res[2 * i + 1] = (uint)(digits[i] >> 16);
         }
+        return res; // сдесь и левая и права половина каждого digits[i]
+    }
 
-        while (carry > 0)
+    private static BetterBigInteger Normalize(ulong[] data, bool negative)
+    {
+        ulong carry = 0;
+
+        for (int i = 0; i < data.Length; i++)
         {
-            Array.Resize(ref digits, digits.Length + 1);
-            digits[^1] = carry % 10;
-            carry /= 10;
+            data[i] += carry;
+            carry = data[i] >> 16;
+            data[i] &= 0xFFFF;
         }
 
-        int last = digits.Length - 1;
-        while (last > 0 && digits[last] == 0)
+        List<uint> result = [];
+
+        for (int i = 0; i < data.Length; i += 2)
         {
-            last--;
+            uint low = (uint)data[i];
+            uint high = (i + 1 < data.Length) ? (uint)data[i + 1] : 0;
+            result.Add((high << 16) | low);
         }
 
-        char[] chars = new char[last + 1];
-        for (int i = 0; i <= last; i++)
-        {
-            chars[i] = (char)('0' + digits[last - i]);
-        }
-
-        return new string(chars);
+        return new BetterBigInteger(result.ToArray(), negative);
     }
 }
